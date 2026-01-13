@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ID Upload Trend</title>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- Timeer functions -->
+  <script>
+    let sqlStartTime = null;
+    let sqlTimerId = null;
+
+    function formatTime(d) {
+    return d.toLocaleTimeString("en-US", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+    });
+    }
+
+    function updateSqlDurationRunning() {
+    if (!sqlStartTime) return;
+    const now = Date.now();
+    const seconds = (now - sqlStartTime.getTime()) / 1000;
+    document.getElementById("sqlDuration").textContent = `${seconds.toFixed(1)} s`;
+    }
+
+    function startSqlTimer() {
+    sqlStartTime = new Date();
+    document.getElementById("sqlStart").textContent = formatTime(sqlStartTime);
+    document.getElementById("sqlDuration").textContent = "0.0 s";
+
+    // Update every 100ms for a smooth seconds display
+    if (sqlTimerId) clearInterval(sqlTimerId);
+    sqlTimerId = setInterval(updateSqlDurationRunning, 100);
+    }
+
+    function stopSqlTimer() {
+    if (!sqlStartTime) return;
+
+    // Stop the running interval
+    if (sqlTimerId) {
+        clearInterval(sqlTimerId);
+        sqlTimerId = null;
+    }
+
+    // Final duration
+    const seconds = (Date.now() - sqlStartTime.getTime()) / 1000;
+    document.getElementById("sqlDuration").textContent = `${seconds.toFixed(2)} s`;
+
+    // Reset start time (optional)
+    sqlStartTime = null;
+    }
+  </script>
+  
+
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 20px; }
+    .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+    label { display: grid; gap: 6px; }
+    input { padding: 8px; font-size: 14px; }
+    button { padding: 9px 14px; font-size: 14px; cursor: pointer; }
+    #meta { margin-top: 10px; color: #444; }
+
+    /* Loading indicator */
+    #loading {
+      display: none; /* toggled by JS */
+      margin-top: 12px;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      max-width: 1100px;
+      align-items: center;
+      gap: 10px;
+    }
+    #loading.show { display: flex; }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #bbb;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .muted { color: #666; font-size: 13px; }
+
+    canvas { max-width: 1100px; }
+  </style>
+</head>
+<body>
+  <h2>ID Upload Trend Report</h2>
+
+  <div class="row">
+    <label>
+      Deploy date (YYYY-MM-DD)
+      <input id="deployDate" type="text" value="2026-01-07" />
+    </label>
+    <label>
+      Days before
+      <input id="daysBefore" type="number" value="30" min="1" max="365" />
+    </label>
+    <button id="runBtn">Run</button>
+  </div>
+
+  <!-- Loading indicator
+  <div id="loading" aria-live="polite" aria-busy="false">
+    <div class="spinner" aria-hidden="true"></div>
+    <div>
+      <div><strong>Processing SQL…</strong></div>
+      <div class="muted">Waiting for database results</div>
+    </div>
+  </div> -->
+
+    <!-- Loading indicator -->
+    <div id="loading" aria-live="polite" aria-busy="false">
+    <div class="spinner" aria-hidden="true"></div>
+    <div>
+        <div><strong>Processing SQL…</strong></div>
+        <div class="muted">
+        Started: <span id="sqlStart">—</span><br />
+        Duration: <span id="sqlDuration">—</span>
+        </div>
+    </div>
+    </div>
+
+  <div id="meta"></div>
+
+  <canvas id="trendChart" height="120"></canvas>
+
+  <script>
+    // Plugin to draw a vertical line at deploy date
+    const verticalLinePlugin = {
+      id: 'verticalLinePlugin',
+      afterDatasetsDraw(chart, args, pluginOptions) {
+        const { ctx, chartArea, scales } = chart;
+        const xScale = scales.x;
+        if (!pluginOptions || !pluginOptions.deployDate) return;
+
+        // Labels are YYYY-MM-DD strings; find the index of deployDate in labels.
+        const labels = chart.data.labels || [];
+        const idx = labels.indexOf(pluginOptions.deployDate);
+        if (idx === -1) return;
+
+        const x = xScale.getPixelForValue(idx);
+        if (!Number.isFinite(x)) return;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#888';
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+
+        // Label
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#444';
+        ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+        ctx.fillText('Deploy', x + 6, chartArea.top + 14);
+        ctx.restore();
+      }
+    };
+
+    Chart.register(verticalLinePlugin);
+
+    const canvas = document.getElementById('trendChart');
+    const loadingEl = document.getElementById('loading');
+    const runBtn = document.getElementById('runBtn');
+    let chart;
+
+    function setLoading(isLoading) {
+      loadingEl.classList.toggle('show', isLoading);
+      loadingEl.setAttribute('aria-busy', String(isLoading));
+      runBtn.disabled = isLoading;
+      runBtn.textContent = isLoading ? 'Running…' : 'Run';
+    }
+
+    async function loadData() {
+      const deployDate = document.getElementById('deployDate').value.trim();
+      const daysBefore = document.getElementById('daysBefore').value;
+
+      const url = `/api/id-upload-trend?deploy_date=${encodeURIComponent(deployDate)}&days_before=${encodeURIComponent(daysBefore)}`;
+      const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `Request failed (${resp.status})`);
+      }
+      return resp.json();
+    }
+
+    function render(data) {
+      // Ensure labels are strictly YYYY-MM-DD (no time)
+      const labels = data.rows.map(r => String(r.day).slice(0, 10));
+      const values = data.rows.map(r => Number(r.total_uploads));
+
+      document.getElementById('meta').textContent =
+        `Window: ${String(data.start_date).slice(0,10)} → ${String(data.end_date).slice(0,10)} | Deploy: ${String(data.deploy_date).slice(0,10)} | Points: ${data.rows.length}`;
+
+      if (chart) chart.destroy();
+
+      chart = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Total uploads per day',
+            data: values,
+            tension: 0.2,
+            pointRadius: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: true },
+            verticalLinePlugin: { deployDate: String(data.deploy_date).slice(0,10) }
+          },
+          scales: {
+            x: {
+              type: 'category',
+              title: { display: true, text: 'Day (YYYY-MM-DD)' },
+              ticks: {
+                // Force display as YYYY-MM-DD and avoid any time formatting
+                callback: function(value) {
+                  const label = this.getLabelForValue(value);
+                  return String(label).slice(0, 10);
+                },
+                maxRotation: 0,
+                autoSkip: true
+              }
+            },
+            y: {
+              title: { display: true, text: 'Uploads' },
+              beginAtZero: true
+            }
+          }
+        }
+      });
+    }
+
+    // async function run() {
+    //   setLoading(true);
+    //   try {
+    //     const data = await loadData();
+    //     render(data);
+    //   } catch (e) {
+    //     alert(e.message);
+    //   } finally {
+    //     setLoading(false);
+    //   }
+    // }
+
+    async function run() {
+    setLoading(true);
+    startSqlTimer();
+
+    try {
+        const data = await loadData();
+        render(data);
+    } catch (e) {
+        alert(e.message);
+    } finally {
+        stopSqlTimer();
+        setLoading(false);
+    }
+    }
+
+    runBtn.addEventListener('click', run);
+
+    // Auto-run once on load
+    run();
+  </script>
+</body>
+</html>

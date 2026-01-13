@@ -1,0 +1,7 @@
+# This creates the file and adds the paths you mentioned
+# echo "node_modules/" >> .gitignore
+# echo ".env" >> .gitignorenode_modules/
+node_modules
+.env
+.DS_Store
+OLD_*
