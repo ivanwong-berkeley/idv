@@ -56,6 +56,7 @@ const pool = mysql.createPool({
 });
 
 
+console.log("I am here after: Testing DB connection.");
 
 // Optional: quick DB ping at startup so you fail early (recommended)
 async function verifyDbConnection() {
